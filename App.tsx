@@ -1,5 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { AadhaarDetails, NumberDetails } from './types';
+import { fetchProtectedAadhaars, fetchProtectedNumbers } from './protection';
+import { getRecentSearches, addRecentSearch } from './storage';
 
 // Aadhaar components
 import SearchCard from './components/SearchCard';
@@ -12,6 +14,7 @@ import NumberResultsCard from './components/NumberResultsCard';
 // Shared components
 import Loader from './components/Loader';
 import Footer from './components/Footer';
+import RecentSearches from './components/RecentSearches';
 
 type View = 'home' | 'aadhaar' | 'number';
 
@@ -24,15 +27,17 @@ const App: React.FC = () => {
   const [aadhaarDetails, setAadhaarDetails] = useState<AadhaarDetails | null>(null);
   const [isAadhaarLoading, setIsAadhaarLoading] = useState<boolean>(false);
   const [aadhaarError, setAadhaarError] = useState<string | null>(null);
+  const [recentAadhaars, setRecentAadhaars] = useState<string[]>(() => getRecentSearches('recentAadhaars'));
 
   // Number info state
   const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [numberDetails, setNumberDetails] = useState<NumberDetails | null>(null);
   const [isNumberLoading, setIsNumberLoading] = useState<boolean>(false);
   const [numberError, setNumberError] = useState<string | null>(null);
+  const [recentNumbers, setRecentNumbers] = useState<string[]>(() => getRecentSearches('recentNumbers'));
 
-  const handleAadhaarSearch = useCallback(async () => {
-    if (aadhaarNumber.length !== 12 || !/^\d+$/.test(aadhaarNumber)) {
+  const handleAadhaarSearch = useCallback(async (searchNumber: string) => {
+    if (searchNumber.length !== 12 || !/^\d+$/.test(searchNumber)) {
       setAadhaarError('Please enter a valid 12-digit Aadhaar number.');
       return;
     }
@@ -42,8 +47,14 @@ const App: React.FC = () => {
     setAadhaarDetails(null);
 
     try {
-      const targetUrl = `https://apibymynk.vercel.app/fetch?key=onlymynk&aadhaar=${aadhaarNumber}`;
-      const proxyUrl = 'https://api.allorigins.win/raw?url=';
+      const protectedAadhaars = await fetchProtectedAadhaars();
+      if (protectedAadhaars.includes(searchNumber)) {
+        setAadhaarError('This Aadhaar number is protected and cannot be searched.');
+        return;
+      }
+
+      const targetUrl = `https://apibymynk.vercel.app/fetch?key=onlymynk&aadhaar=${searchNumber}`;
+      const proxyUrl = 'https://corsproxy.io/?';
       const response = await fetch(`${proxyUrl}${encodeURIComponent(targetUrl)}`);
       
       if (!response.ok) {
@@ -74,6 +85,8 @@ const App: React.FC = () => {
             members: members,
           };
           setAadhaarDetails(finalDetails);
+          const updatedSearches = addRecentSearch('recentAadhaars', searchNumber);
+          setRecentAadhaars(updatedSearches);
         } else {
           setAadhaarError('Please try again after few time.');
           setAadhaarDetails(null);
@@ -93,10 +106,10 @@ const App: React.FC = () => {
     } finally {
       setIsAadhaarLoading(false);
     }
-  }, [aadhaarNumber]);
+  }, []);
 
-  const handleNumberSearch = useCallback(async () => {
-    if (phoneNumber.length !== 10 || !/^\d+$/.test(phoneNumber)) {
+  const handleNumberSearch = useCallback(async (searchNumber: string) => {
+    if (searchNumber.length !== 10 || !/^\d+$/.test(searchNumber)) {
       setNumberError('Please enter a valid 10-digit mobile number.');
       return;
     }
@@ -106,10 +119,14 @@ const App: React.FC = () => {
     setNumberDetails(null);
 
     try {
-      const apiKey = '5bc2ef3cf7da1e52eedf1adf5a627b3d';
-      const targetUrl = `https://rajvir.trd.cc.nf/info.php?number=${phoneNumber}&key=${apiKey}`;
-      const proxyUrl = 'https://api.allorigins.win/raw?url=';
-      const response = await fetch(`${proxyUrl}${encodeURIComponent(targetUrl)}`);
+      const protectedNumbers = await fetchProtectedNumbers();
+      if (protectedNumbers.includes(searchNumber)) {
+        setNumberError('This phone number is protected and cannot be searched.');
+        return;
+      }
+      
+      const targetUrl = `https://truecaller-api.vercel.app/search?phone=${searchNumber}`;
+      const response = await fetch(targetUrl);
 
       if (!response.ok) {
         throw new Error(`The server responded with an error (Status: ${response.status})`);
@@ -117,22 +134,24 @@ const App: React.FC = () => {
 
       const data = await response.json();
 
-      if (data.status !== 'success' || !data.data) {
-        setNumberError(data.msg || 'No details found for this number.');
+      if (data.status !== 'success' || !data.data || !data.data.name) {
+        setNumberError('No details found for this number.');
         setNumberDetails(null);
       } else {
         const rawDetails = data.data;
         const formattedDetails: NumberDetails = {
-          mobile: rawDetails['📱 Mobile'] || '-',
-          name: rawDetails['👤 Name'] || '-',
-          father: rawDetails['👨‍👩‍👧 Father'] || '-',
-          address: rawDetails['🏠 Address'] || '-',
-          altMobile: rawDetails['📞 Alt Mobile'] || '-',
-          circleIsp: rawDetails['📶 Circle/ISP'] || '-',
-          aadhar: rawDetails['🆔 Aadhar'] || '-',
-          email: rawDetails['✉️ Email'] || '-',
+          mobile: rawDetails.phone?.international || searchNumber,
+          name: rawDetails.name || '-',
+          father: '-',
+          address: rawDetails.address?.city || '-',
+          altMobile: '-',
+          circleIsp: rawDetails.carrier || '-',
+          aadhar: '-',
+          email: rawDetails.email || '-',
         };
         setNumberDetails(formattedDetails);
+        const updatedSearches = addRecentSearch('recentNumbers', searchNumber);
+        setRecentNumbers(updatedSearches);
       }
     } catch (err) {
       console.error(err);
@@ -148,7 +167,17 @@ const App: React.FC = () => {
     } finally {
       setIsNumberLoading(false);
     }
-  }, [phoneNumber]);
+  }, []);
+  
+  const handleRecentAadhaarClick = (query: string) => {
+    setAadhaarNumber(query);
+    handleAadhaarSearch(query);
+  };
+
+  const handleRecentNumberClick = (query: string) => {
+    setPhoneNumber(query);
+    handleNumberSearch(query);
+  };
   
   const resetAndGoHome = () => {
     setView('home');
@@ -176,8 +205,13 @@ const App: React.FC = () => {
             <SearchCard
               aadhaarNumber={aadhaarNumber}
               setAadhaarNumber={setAadhaarNumber}
-              onSearch={handleAadhaarSearch}
+              onSearch={() => handleAadhaarSearch(aadhaarNumber)}
               isLoading={isAadhaarLoading}
+            />
+             <RecentSearches
+              title="Recent Searches"
+              searches={recentAadhaars}
+              onSearch={handleRecentAadhaarClick}
             />
             <div className="w-full mt-8">
               {isAadhaarLoading && <Loader />}
@@ -204,8 +238,13 @@ const App: React.FC = () => {
             <NumberSearchCard
               phoneNumber={phoneNumber}
               setPhoneNumber={setPhoneNumber}
-              onSearch={handleNumberSearch}
+              onSearch={() => handleNumberSearch(phoneNumber)}
               isLoading={isNumberLoading}
+            />
+             <RecentSearches
+              title="Recent Searches"
+              searches={recentNumbers}
+              onSearch={handleRecentNumberClick}
             />
             <div className="w-full mt-8">
               {isNumberLoading && <Loader />}
